@@ -1,0 +1,902 @@
+import java_cup.runtime.*;
+import com.github.vr_f.sqlparser.expression.*;
+import com.github.vr_f.sqlparser.expression.sql.*;
+import com.github.vr_f.sqlparser.expression.select.*;
+import com.github.vr_f.sqlparser.expression.select.table.*;
+import com.github.vr_f.sqlparser.expression.sql.function.*;
+import com.github.vr_f.sqlparser.core.keywords.KeywordsLibrary;
+import com.github.vr_f.sqlparser.core.exception.*;
+import java.util.LinkedList;
+import java.util.Arrays;
+
+parser code {:
+    private KeywordsLibrary library;
+
+    public InnerParser(java_cup.runtime.Scanner s, KeywordsLibrary library) {
+      this(s);
+      this.library = library;
+    }
+
+    public void report_error(String message, Object info) {
+    }
+
+    protected void report_expected_token_ids() {
+    }
+
+    protected void checkForKeyword(String name) throws Exception {
+        if (library.isKeyword(name)) {
+            throw new IllegalKeywordUse(name);
+        }
+    }
+
+    protected Sql buildExpr(String value) {
+        return new Terminal(value);
+    }
+
+    protected Sql buildExpr(Sql... operands) {
+        return new Nary(Arrays.copyOf(operands, operands.length, Sql[].class));
+    }
+
+    protected Sql buildExpr(Object... operands) throws Exception {
+        for (int i = 0; i < operands.length; i++) {
+            if (operands[i] instanceof String) {
+                operands[i] = new Terminal((String)operands[i]);
+            } else if (null != operands[i] && !Sql.class.isInstance(operands[i])) {
+              throw new Exception(String.format("Invalid expression type: %s", operands[i].getClass()));
+            }
+        }
+
+        return new Nary(Arrays.copyOf(operands, operands.length, Sql[].class));
+    }
+
+    public Sql[] expand(Object... exprs) throws Exception {
+        for(int i = 0; i < exprs.length; i++) {
+            if (!Sql.class.isInstance(exprs[i])) {
+                exprs[i] = buildExpr(exprs[i]);
+            }
+        }
+
+        return expand(Arrays.copyOf(exprs, exprs.length, Sql[].class));
+    }
+
+    public Sql[] expand(Sql... exprs) {
+        java.util.List<Sql> result = new LinkedList<>();
+        for (Sql expr : exprs) {
+            if (expr instanceof Nary) {
+                result.addAll(Arrays.asList(expand(((Nary) expr).getParts())));
+            } else {
+                result.add(expr);
+            }
+        }
+
+        return Arrays.copyOf(result.toArray(), result.size(), Sql[].class);
+    }
+:}
+
+terminal ADDDATE, AGAINST, ALL, AND, ANY, AS, ASC, ASCII, BETWEEN, BETWEENAND, BINARY, BOTH, BY, CASE, CAST, CHAR, CHARACTER, COLUMNS, CONVERT, CROSS, CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP, DATE, DATETIME, DECIMAL, DESC, DISTINCT, DISTINCTROW, DIV, DUMPFILE, ELSE, ENCLOSED, END, ESCAPE, ESCAPED, EXISTS, EXTRACT, FIELDS, FOR, FORCE, FROM, GROUP, HAVING, HIGH_PRIORITY, IF, IGNORE, IN, INNER, INTERVAL, INTO, IS, JOIN, KEY, LEADING, LEFT, LIKE, LIMIT, LINES, MATCH, MOD, NATURAL, NOT, NULL, OFFSET, ON, OPTIONALLY, OR, ORDER, OUTER, OUTFILE, PARTITION, REGEXP, RIGHT, ROLLUP, SELECT, SET, SIGNED, SOME, SOUNDSLIKE, SQL_BIG_RESULT, SQL_BUFFER_RESULT, SQL_CACHE, SQL_NO_CACHE, SQL_CALC_FOUND_ROWS, SQL_SMALL_RESULT, STARTING, STRAIGHT_JOIN, SUBDATE, TERMINATED, THEN, TIME, TRAILING, UNICODE, UNSIGNED, USE, USING, WHEN, WHERE, WITH, XOR, MINUS, UMINUS, PLUS, AMPERSAND, TILDE, PIPE, CARET, SLASH, PERCENT, STAR, OP, CP, COMMA, DOT, SEMICOLON, EM, ASSIGN, SUBSTRING, TRIM, DATE_ADD, DATE_SUB, COUNT;
+
+terminal MICROSECOND, SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, QUARTER, YEAR, SECOND_MICROSECOND, MINUTE_MICROSECOND, MINUTE_SECOND, HOUR_MICROSECOND, HOUR_SECOND, HOUR_MINUTE, DAY_MICROSECOND, DAY_SECOND, DAY_MINUTE, DAY_HOUR, YEAR_MONTH;
+
+terminal Integer INTNUM;
+terminal Float APPROXNUM;
+terminal String BOOL, COMPARISON, DOTNAME, ESCNAME, NAME, SHIFT, STRING, VARIABLE;
+
+non terminal Select select_expr;
+non terminal List table_partition, index_hint_list, index_hint_list_optional;
+non terminal From from_expr;
+non terminal Where where_expr;
+non terminal GroupBy group_expr;
+non terminal Having having_expr;
+non terminal OrderBy order_by_expr;
+non terminal Limit limit_expr;
+non terminal Into into_expr;
+
+non terminal List select_source, table_references, group_by_conditions, order_by_conditions, variables_list;
+non terminal Sql select_options, select_options_first, select_options_second, select_source_expr, table_reference, index_hint, index_hint_for_optional, index_hint_for, join_table, join_condition, join_condition_optional, join_left_right_outer, group_by_condition, order_by_condition, export_options, export_options_fields, export_options_lines, export_options_terminated, export_options_enclosed, export_options_escaped, export_options_starting;
+non terminal Factor table_factor;
+non terminal String expr_alias_optional, expr_alias, join_inner_cross_optional, join_inner_cross, asc_desc_cond;
+non terminal Boolean with_rollup;
+non terminal Charset charset_optional, charset;
+
+non terminal Sql sql_expression, case_when_then_else, convert_type;
+non terminal Function sql_func_expr;
+non terminal List sql_expression_list, sql_expression_list_optional;
+non terminal SubSelect sub_select_expr;
+non terminal String date_unit, trim_mod, search_modifier, name_expr, dotname_expr;
+
+precedence left PLUS, MINUS, STAR, SLASH, DIV, PERCENT, MOD, AMPERSAND, PIPE, CARET, AND, OR, XOR, COMPARISON, BETWEEN, NOT, BETWEEN, SHIFT, COMMA, JOIN, STRAIGHT_JOIN, EXISTS;
+precedence right ASSIGN;
+precedence nonassoc IN, IS, LIKE, REGEXP, SOUNDSLIKE, TILDE, UMINUS, ON, USING;
+
+start with select_expr;
+
+select_expr ::=
+            select_expr:s SEMICOLON
+            {: RESULT = s; :}
+            |
+            SELECT select_options:opts select_source:source into_expr:into
+            {: RESULT = new Select(opts, source, into); :}
+            |
+            SELECT select_options:opts select_source:source FROM from_expr:from where_expr:where group_expr:group having_expr:having order_by_expr:order limit_expr:limit into_expr:into
+            {: RESULT = new Select(opts, source, from, where, group, having, order, limit, into); :}
+            ;
+
+select_options ::=
+        select_options_first:f select_options_second:s
+        {: RESULT = buildExpr(expand(f, s)); :}
+        ;
+
+select_options_first ::=
+                        {: RESULT = buildExpr(); :}
+        | ALL           {: RESULT = buildExpr("ALL"); :}
+        | DISTINCT      {: RESULT = buildExpr("DISTINCT"); :}
+        | DISTINCTROW   {: RESULT = buildExpr("DISTINCTROW"); :}
+        ;
+
+select_options_second ::=
+        {: RESULT = buildExpr(); :}
+        |
+        select_options_second:e HIGH_PRIORITY
+        {: RESULT = buildExpr(expand(e, "HIGH_PRIORITY")); :}
+        |
+        select_options_second:e STRAIGHT_JOIN
+        {: RESULT = buildExpr(expand(e, "STRAIGHT_JOIN")); :}
+        |
+        select_options_second:e SQL_SMALL_RESULT
+        {: RESULT = buildExpr(expand(e, "SQL_SMALL_RESULT")); :}
+        |
+        select_options_second:e SQL_BIG_RESULT
+        {: RESULT = buildExpr(expand(e, "SQL_BIG_RESULT")); :}
+        |
+        select_options_second:e SQL_BUFFER_RESULT
+        {: RESULT = buildExpr(expand(e, "SQL_BUFFER_RESULT")); :}
+        |
+        select_options_second:e SQL_CACHE
+        {: RESULT = buildExpr(expand(e, "SQL_CACHE")); :}
+        |
+        select_options_second:e SQL_NO_CACHE
+        {: RESULT = buildExpr(expand(e, "SQL_NO_CACHE")); :}
+        |
+        select_options_second:e SQL_CALC_FOUND_ROWS
+        {: RESULT = buildExpr(expand(e, "SQL_CALC_FOUND_ROWS")); :}
+        ;
+
+select_source ::=
+        select_source_expr:e
+        {:RESULT = new List(false, e); :}
+        |
+        select_source:s COMMA select_source_expr:e
+        {:
+          java.util.List<Sql> list = s.getList();
+          list.add(e);
+          RESULT = new List(false, list.toArray(new Sql[0]));
+        :}
+        ;
+
+select_source_expr ::=
+        STAR
+        {: RESULT = new SourceEntry(buildExpr("*")); :}
+        |
+        name_expr:n DOT STAR
+        {: RESULT = new SourceEntry(buildExpr(n + ".*")); :}
+        |
+        sql_expression:e expr_alias_optional:a
+        {: RESULT = new SourceEntry(e, a); :}
+        ;
+
+expr_alias_optional ::=
+        | expr_alias:a {: RESULT = a; :}
+        ;
+
+expr_alias ::=
+        AS name_expr:n {: RESULT = n; :}
+        | name_expr:n  {: RESULT = n; :}
+        ;
+
+from_expr ::=
+        table_references:r
+        {: RESULT = new From(r); :}
+        ;
+
+table_references ::=
+        table_reference:r
+        {: RESULT = new List(false, r); :}
+        |
+        table_references:l COMMA table_reference:r
+        {:
+          java.util.List<Sql> list = l.getList();
+          list.add(r);
+          RESULT = new List(false, list.toArray(new Sql[0]));
+        :}
+        ;
+
+table_reference ::=
+        table_factor:t {: RESULT = t; :}
+        | join_table:j {: RESULT = j; :}
+        ;
+
+table_factor ::=
+        name_expr:n table_partition:p expr_alias_optional:a index_hint_list_optional:i
+        {: RESULT = new Factor(n, p, a, i); :}
+        |
+        dotname_expr:n table_partition:p expr_alias_optional:a index_hint_list_optional:i
+        {: RESULT = new Factor(n, p, a, i); :}
+        |
+        sub_select_expr:s expr_alias:a
+        {: RESULT = new Factor(s, a, null); :}
+        |
+        sub_select_expr:s expr_alias:a OP sql_expression_list:l CP
+        {: RESULT = new Factor(s, a, l.withParenthesis()); :}
+        |
+        OP table_references:r CP
+        {: RESULT = new Factor(r.withParenthesis()); :}
+        ;
+
+table_partition ::=
+        |
+        PARTITION OP sql_expression_list:l CP
+        {: RESULT = l.withParenthesis();:}
+        ;
+
+index_hint_list_optional ::=
+        | index_hint_list:l {: RESULT = l; :}
+        ;
+
+index_hint_list ::=
+        index_hint:h
+        {: RESULT = new List(false, h); :}
+        |
+        index_hint_list:l COMMA index_hint:h
+        {:
+          java.util.List<Sql> list = l.getList();
+          list.add(h);
+          RESULT = new List(false, list.toArray(new Sql[0]));
+        :}
+        ;
+
+index_hint ::=
+        USE KEY index_hint_for_optional:f OP sql_expression_list:i CP
+        {: RESULT = buildExpr("USE", "KEY", f, i.withParenthesis()); :}
+        |
+        IGNORE KEY index_hint_for_optional:f OP sql_expression_list:i CP
+        {: RESULT = buildExpr("IGNORE", "KEY", f, i.withParenthesis()); :}
+        |
+        FORCE KEY index_hint_for_optional:f OP sql_expression_list:i CP
+        {: RESULT = buildExpr("FORCE", "KEY", f, i.withParenthesis()); :}
+        ;
+
+index_hint_for_optional ::=
+        | index_hint_for:i {: RESULT = i; :}
+        ;
+
+index_hint_for ::=
+        FOR JOIN        {: RESULT = buildExpr("FOR", "JOIN"); :}
+        | FOR ORDER BY  {: RESULT = buildExpr("FOR", "ORDER BY"); :}
+        | FOR GROUP BY  {: RESULT = buildExpr("FOR", "GROUP BY"); :}
+        ;
+
+join_table ::=
+        table_reference:r join_inner_cross_optional:type JOIN table_factor:table join_condition_optional:c
+        {: RESULT = new Join(r, buildExpr(type, "JOIN"), table, c); :}
+        |
+        table_reference:r STRAIGHT_JOIN table_factor:table
+        {: RESULT = new Join(r, buildExpr("STRAIGHT_JOIN"), table); :}
+        |
+        table_reference:r STRAIGHT_JOIN table_factor:table ON sql_expression:c
+        {: RESULT = new Join(r, buildExpr("STRAIGHT_JOIN"), table, buildExpr("ON", c)); :}
+        |
+        table_reference:r join_left_right_outer:type JOIN table_reference:table join_condition:c
+        {: RESULT = new Join(r, buildExpr(expand(type, "JOIN")), table, c); :}
+        |
+        table_reference:r NATURAL join_left_right_outer:type JOIN table_factor:table
+        {: RESULT = new Join(r, buildExpr(expand("NATURAL", type, "JOIN")), table); :}
+        |
+        table_reference:r NATURAL INNER JOIN table_factor:table
+        {: RESULT = new Join(r, buildExpr("NATURAL", "INNER", "JOIN"), table); :}
+        |
+        table_reference:r NATURAL JOIN table_factor:table
+        {: RESULT = new Join(r, buildExpr("NATURAL", "JOIN"), table); :}
+        ;
+
+join_inner_cross_optional ::=
+        | join_inner_cross:j {: RESULT = j; :}
+        ;
+
+join_inner_cross ::=
+        INNER {: RESULT = "INNER"; :}
+        | CROSS {: RESULT = "CROSS"; :}
+        ;
+
+join_left_right_outer ::=
+        LEFT          {: RESULT = buildExpr("LEFT"); :}
+        | RIGHT       {: RESULT = buildExpr("RIGHT"); :}
+        | LEFT OUTER  {: RESULT = buildExpr("LEFT", "OUTER"); :}
+        | RIGHT OUTER {: RESULT = buildExpr("RIGHT", "OUTER"); :}
+        ;
+
+join_condition_optional ::=
+        | join_condition:e {: RESULT = e; :}
+        ;
+
+join_condition ::=
+        ON sql_expression:e
+        {: RESULT = buildExpr("ON", e); :}
+        |
+        USING OP sql_expression_list:l CP
+        {: RESULT = buildExpr("USING", l.withParenthesis()); :}
+        ;
+
+where_expr ::=
+        | WHERE sql_expression:e {: RESULT = new Where(e); :}
+        ;
+
+group_expr ::=
+        |
+        GROUP BY group_by_conditions:l with_rollup:r
+        {: RESULT = new GroupBy(l, r); :}
+        ;
+
+group_by_conditions ::=
+        group_by_condition:c
+        {: RESULT = new List(false, c); :}
+        |
+        group_by_conditions:l COMMA group_by_condition:c
+        {:
+          java.util.List<Sql> list = l.getList();
+          list.add(c);
+          RESULT = new List(false, list.toArray(new Sql[0]));
+        :}
+        ;
+
+group_by_condition ::=
+        sql_expression:e asc_desc_cond:c {: RESULT = buildExpr(e, c); :}
+        ;
+
+having_expr ::=
+        | HAVING sql_expression:e {: RESULT = new Having(e); :}
+        ;
+
+order_by_expr ::=
+        |
+        ORDER BY order_by_conditions:l with_rollup:r
+        {: RESULT = new OrderBy(l, r); :}
+        ;
+
+order_by_conditions ::=
+        order_by_condition:c
+        {: RESULT = new List(false, c); :}
+        |
+        order_by_conditions:l COMMA order_by_condition:c
+        {:
+          java.util.List<Sql> list = l.getList();
+          list.add(c);
+          RESULT = new List(false, list.toArray(new Sql[0]));
+        :}
+        ;
+
+order_by_condition ::=
+        sql_expression:e asc_desc_cond:c {: RESULT = buildExpr(e, c); :}
+        ;
+
+asc_desc_cond ::=
+        | ASC   {: RESULT = "ASC"; :}
+        | DESC  {: RESULT = "DESC"; :}
+        ;
+
+with_rollup ::=
+        {: RESULT = false; :}
+        | WITH ROLLUP {: RESULT = true; :}
+        ;
+
+limit_expr ::=
+        |
+        LIMIT sql_expression:count
+        {: RESULT = new Limit(null, count); :}
+        |
+        LIMIT sql_expression:offset COMMA sql_expression:count
+        {: RESULT = new Limit(offset, count); :}
+        |
+        LIMIT sql_expression:count OFFSET sql_expression:offset
+        {: RESULT = new Limit(offset, count); :}
+        ;
+
+into_expr ::=
+        |
+        INTO OUTFILE sql_expression:file charset_optional:c export_options:o
+        {: RESULT = new Into(file, c, o); :}
+        |
+        INTO DUMPFILE sql_expression:file
+        {: RESULT = new Into(file); :}
+        |
+        INTO variables_list:l
+        {: RESULT = new Into(l); :}
+        ;
+
+variables_list ::=
+        VARIABLE:v
+        {: RESULT = new List(false, new Variable(v)); :}
+        |
+        variables_list:l COMMA VARIABLE:v
+        {:
+          java.util.List<Sql> list = l.getList();
+          list.add(new Variable(v));
+          RESULT = new List(list.toArray(new Sql[0]));
+        :}
+        ;
+
+charset_optional ::=
+        | charset:c {: RESULT = c; :}
+        ;
+
+charset ::=
+        CHARACTER SET sql_expression:e {: RESULT = new Charset(e); :}
+        | ASCII {: RESULT = new Charset(buildExpr("latin1")); :}
+        | UNICODE {: RESULT = new Charset(buildExpr("ucs2")); :}
+        ;
+
+export_options ::=
+        export_options_fields:f export_options_lines:l
+        {: RESULT = buildExpr(f, l); :}
+        ;
+
+export_options_fields ::=
+        |
+        FIELDS export_options_terminated:e1 export_options_enclosed:e2 export_options_escaped:e3
+        {: RESULT = buildExpr("FIELDS", e1, e2, e3); :}
+        |
+        COLUMNS export_options_terminated:e1 export_options_enclosed:e2 export_options_escaped:e3
+        {: RESULT = buildExpr("COLUMNS", e1, e2, e3); :}
+        ;
+
+export_options_lines ::=
+        |
+        LINES export_options_starting:e1 export_options_terminated:e2
+        {: RESULT = buildExpr(e1, e2); :}
+        ;
+
+export_options_terminated ::=
+        |
+        TERMINATED BY sql_expression:e
+        {: RESULT = buildExpr("TERMINATED BY", e); :}
+        ;
+
+export_options_enclosed ::=
+        |
+        ENCLOSED BY sql_expression:e
+        {: RESULT = buildExpr("ENCLOSED BY", e); :}
+        |
+        OPTIONALLY ENCLOSED BY sql_expression:e
+        {: RESULT = buildExpr("OPTIONALLY ENCLOSED BY", e); :}
+        ;
+
+export_options_escaped ::=
+        |
+        ESCAPED BY sql_expression:e
+        {: RESULT = buildExpr("ESCAPED BY", e); :}
+        ;
+
+export_options_starting ::=
+        |
+        STARTING BY sql_expression:e
+        {: RESULT = buildExpr("STARTING BY", e); :}
+        ;
+
+sql_expression ::=
+        VARIABLE:v ASSIGN sql_expression:e
+        {: RESULT = buildExpr(new Variable(v), ":=", e); :}
+        |
+
+        sql_expression:e1 OR sql_expression:e2
+        {: RESULT = buildExpr(e1, "OR", e2); :}
+        |
+
+        sql_expression:e1 XOR sql_expression:e2
+        {: RESULT = buildExpr(e1, "XOR", e2); :}
+        |
+
+        sql_expression:e1 AND sql_expression:e2
+        {: RESULT = buildExpr(e1, "AND", e2); :}
+        |
+
+        NOT sql_expression:e
+        {: RESULT = buildExpr("NOT", e); :}
+        |
+
+        sql_expression:e1 BETWEEN sql_expression:e2 BETWEENAND sql_expression:e3
+        {: RESULT = buildExpr(e1, "BETWEEN", e2, "AND", e3); :}
+        %prec BETWEEN
+        |
+        CASE sql_expression:v case_when_then_else:c END
+        {: RESULT = buildExpr("CASE", v, c); :}
+        |
+        CASE case_when_then_else:c END
+        {: RESULT = buildExpr("CASE", c); :}
+        |
+
+        sql_expression:e1 REGEXP sql_expression:e2
+        {: RESULT = buildExpr(e1, "REGEXP", e2); :}
+        |
+        sql_expression:e1 NOT REGEXP sql_expression:e2
+        {: RESULT = buildExpr(e1, "NOT REGEXP", e2); :}
+        |
+        sql_expression:e1 LIKE sql_expression:e2
+        {: RESULT = buildExpr(e1, "LIKE", e2); :}
+        |
+        sql_expression:e1 LIKE sql_expression:e2 ESCAPE sql_expression:e3
+        {: RESULT = buildExpr(e1, "LIKE", e2, "ESCAPE", e3); :}
+        |
+        sql_expression:e1 NOT LIKE sql_expression:e2
+        {: RESULT = buildExpr(e1, "NOT LIKE", e2); :}
+        |
+        sql_expression:e1 NOT LIKE sql_expression:e2 ESCAPE sql_expression:e3
+        {: RESULT = buildExpr(e1, "NOT LIKE", e2, "ESCAPE", e3); :}
+        |
+        sql_expression:e1 SOUNDSLIKE sql_expression:e2
+        {: RESULT = buildExpr(e1, "SOUNDS LIKE", e2); :}
+        |
+        sql_expression:e IN OP sql_expression_list_optional:l CP
+        {: RESULT = buildExpr(e, "IN", null != l ? l.withParenthesis() : new List()); :}
+        %prec IN
+        |
+        sql_expression:e NOT IN OP sql_expression_list_optional:l CP
+        {: RESULT = buildExpr(e, "NOT IN", null != l ? l.withParenthesis() : new List()); :}
+        %prec IN
+        |
+        sql_expression:e IN sub_select_expr:s
+        {: RESULT = buildExpr(e, "IN", s); :}
+        |
+        sql_expression:e NOT IN sub_select_expr:s
+        {: RESULT = buildExpr(e, "NOT IN", s); :}
+        |
+        sql_expression:e IS NULL
+        {: RESULT = buildExpr(e, "IS NULL"); :}
+        %prec IS
+        |
+        sql_expression:e IS NOT NULL
+        {: RESULT = buildExpr(e, "IS NOT NULL"); :}
+        %prec IS
+        |
+        sql_expression:e IS BOOL:b
+        {: RESULT = buildExpr(e, "IS", b); :}
+        %prec IS
+        |
+        sql_expression:e IS NOT BOOL:b
+        {: RESULT = buildExpr(e, "IS NOT ", b); :}
+        %prec IS
+        |
+        sql_expression:e1 COMPARISON:c sql_expression:e2
+        {: RESULT = buildExpr(e1, c, e2); :}
+        |
+        sql_expression:e COMPARISON:c ANY sub_select_expr:s
+        {: RESULT = buildExpr(e, c, "ANY", s); :}
+        %prec COMPARISON
+        |
+        sql_expression:e COMPARISON:c SOME sub_select_expr:s
+        {: RESULT = buildExpr(e, c, "ANY", s); :}
+        %prec COMPARISON
+        |
+        sql_expression:e COMPARISON:c ALL sub_select_expr:s
+        {: RESULT = buildExpr(e, c, "ALL", s); :}
+        %prec COMPARISON
+        |
+
+        sql_expression:e1 PIPE sql_expression:e2
+        {: RESULT = buildExpr(e1, "|", e2); :}
+        |
+
+        sql_expression:e1 AMPERSAND sql_expression:e2
+        {: RESULT = buildExpr(e1, "&", e2); :}
+        |
+
+        sql_expression:e1 SHIFT:s sql_expression:e2
+        {: RESULT = buildExpr(e1, s, e2); :}
+        |
+
+        sql_expression:e1 PLUS sql_expression:e2
+        {: RESULT = buildExpr(e1, "+", e2); :}
+        |
+        sql_expression:e1 MINUS sql_expression:e2
+        {: RESULT = buildExpr(e1, "-", e2); :}
+        |
+
+        sql_expression:e1 MOD sql_expression:e2
+        {: RESULT = buildExpr(e1, "%", e2); :}
+        |
+        sql_expression:e1 PERCENT sql_expression:e2
+        {: RESULT = buildExpr(e1, "%", e2); :}
+        |
+        sql_expression:e1 DIV sql_expression:e2
+        {: RESULT = buildExpr(e1, "DIV", e2); :}
+        |
+        sql_expression:e1 SLASH sql_expression:e2
+        {: RESULT = buildExpr(e1, "/", e2); :}
+        |
+        sql_expression:e1 STAR sql_expression:e2
+        {: RESULT = buildExpr(e1, "*", e2); :}
+        |
+
+        sql_expression:e1 CARET sql_expression:e2
+        {: RESULT = buildExpr(e1, "^", e2); :}
+        |
+
+        TILDE sql_expression:e
+        {: RESULT = buildExpr("~", e); :}
+        |
+        MINUS sql_expression:e
+        {: RESULT = buildExpr("-", e); :}
+        %prec UMINUS
+        |
+
+        sql_func_expr:f
+        {: RESULT = f; :}
+        |
+
+        sub_select_expr:s
+        {: RESULT = s; :}
+        |
+        EXISTS sub_select_expr:s
+        {: RESULT = buildExpr("EXISTS", s); :}
+        |
+        EM sql_expression:e
+        {: RESULT = buildExpr("!", e); :}
+        |
+        OP sql_expression:e CP
+        {: RESULT = new Parenthesis(e); :}
+        |
+        name_expr:n
+        {: RESULT = buildExpr(n); :}
+        |
+        dotname_expr:n
+        {: RESULT = buildExpr(n); :}
+        |
+        STRING:s
+        {: RESULT = buildExpr(s); :}
+        |
+        INTNUM:i
+        {: RESULT = buildExpr(String.valueOf(i)); :}
+        |
+        APPROXNUM:f
+        {: RESULT = buildExpr(String.valueOf(f)); :}
+        |
+        BOOL:b
+        {: RESULT = buildExpr(b); :}
+        |
+        VARIABLE:v
+        {: RESULT = new Variable(v); :}
+        ;
+
+name_expr ::=
+        NAME:n
+        {:
+          checkForKeyword(n);
+          RESULT = n;
+        :}
+        |
+        ESCNAME:n
+        {: RESULT = n; :}
+        ;
+
+dotname_expr ::=
+        DOTNAME:n
+        {:
+          RESULT = n;
+        :}
+        |
+        name_expr:n1 DOT name_expr:n2
+        {: RESULT = n1 + "." + n2; :}
+        ;
+
+sql_func_expr ::=
+        ADDDATE OP sql_expression:e1 COMMA INTERVAL sql_expression:e2 date_unit:u CP
+        {: RESULT = new Function("ADDDATE", e1, buildExpr("INTERVAL", e2, u)); :}
+        |
+        ADDDATE OP sql_expression:e1 COMMA sql_expression:e2 CP
+        {: RESULT = new Function("ADDDATE", e1, e2); :}
+        |
+        BINARY sql_expression:e
+        {: RESULT = new Function("BINARY", new List(false, e)); :}
+        |
+        CAST OP sql_expression_list:e AS convert_type:t CP
+        {: RESULT = new Function("CAST", buildExpr(e, "AS", t)); :}
+        |
+        CHAR OP sql_expression_list:l CP
+        {: RESULT = new Char("CHAR", l); :}
+        |
+        CHAR OP sql_expression_list:l USING sql_expression:c CP
+        {: RESULT = new Char("CHAR", l, c); :}
+        |
+        CHARACTER OP sql_expression_list:l CP
+        {: RESULT = new Char("CHAR", l); :}
+        |
+        CHARACTER OP sql_expression_list:l USING sql_expression:c CP
+        {: RESULT = new Char("CHAR", l, c); :}
+        |
+        CONVERT OP sql_expression:e COMMA convert_type:t CP
+        {: RESULT = new Function("CONVERT", e, t); :}
+        |
+        CONVERT OP sql_expression:e USING sql_expression:t CP
+        {: RESULT = new Function("CONVERT", buildExpr(e, "USING", t)); :}
+        |
+        COUNT OP sql_expression:e CP
+        {: RESULT = new Function("COUNT", e); :}
+        |
+        COUNT OP STAR CP
+        {: RESULT = new Function("COUNT", buildExpr("*")); :}
+        |
+        DATE_ADD OP sql_expression:d INTERVAL sql_expression:i date_unit:u CP
+        {: RESULT = new Function("DATE_ADD", buildExpr(d, "INTERVAL", i, u)); :}
+        |
+        DATE_SUB OP sql_expression:d INTERVAL sql_expression:i date_unit:u CP
+        {: RESULT = new Function("DATE_SUB", buildExpr(d, "INTERVAL", i, u)); :}
+        |
+        EXTRACT OP date_unit:u FROM sql_expression:e CP
+        {: RESULT = new Function("EXTRACT", buildExpr(u, "FROM", e)); :}
+        |
+        IF OP sql_expression:e1 COMMA sql_expression:e2 COMMA sql_expression:e3 CP
+        {: RESULT = new Function("IF", e1, e2, e3); :}
+        |
+        MATCH OP sql_expression_list:l CP AGAINST OP sql_expression:e search_modifier:m CP
+        {: RESULT = new Match(l.withParenthesis(), e, m); :}
+        |
+        NAME:n OP sql_expression_list_optional:l CP
+        {: RESULT = null != l ? new Function(n,l) : new Function(n); :}
+        |
+        SUBDATE OP sql_expression:e1 COMMA INTERVAL sql_expression:e2 date_unit:u CP
+        {: RESULT = new Function("SUBDATE", e1, buildExpr("INTERVAL", e2, u)); :}
+        |
+        SUBDATE OP sql_expression:e1 COMMA sql_expression:e2 CP
+        {: RESULT = new Function("SUBDATE", e1, e2); :}
+        |
+        SUBSTRING OP sql_expression:str COMMA sql_expression:pos CP
+        {: RESULT = new Function("SUBSTR", str, pos); :}
+        |
+        SUBSTRING OP sql_expression:str COMMA sql_expression:pos COMMA sql_expression:len CP
+        {: RESULT = new Function("SUBSTR", str, pos, len); :}
+        |
+        SUBSTRING OP sql_expression:str FROM sql_expression:pos CP
+        {: RESULT = new Function("SUBSTR", buildExpr(str, "FROM", pos)); :}
+        |
+        SUBSTRING OP sql_expression:str FROM sql_expression:pos FOR sql_expression:len CP
+        {: RESULT = new Function("SUBSTR", buildExpr(str, "FROM", pos, "FOR", len)); :}
+        |
+        TRIM OP sql_expression:e CP
+        {: RESULT = new Function("TRIM", e); :}
+        |
+        TRIM OP trim_mod:m sql_expression:e1 FROM sql_expression:e2 CP
+        {: RESULT = new Function("TRIM", buildExpr(m, e1, "FROM", e2)); :}
+        |
+        CURRENT_DATE
+        {: RESULT = new Function("CURDATE"); :}
+        |
+        CURRENT_DATE OP CP
+        {: RESULT = new Function("CURDATE"); :}
+        |
+        CURRENT_TIME
+        {: RESULT = new Function("CURTIME"); :}
+        |
+        CURRENT_TIME OP CP
+        {: RESULT = new Function("CURTIME"); :}
+        |
+        CURRENT_TIMESTAMP
+        {: RESULT = new Function("NOW"); :}
+        |
+        CURRENT_TIMESTAMP OP CP
+        {: RESULT = new Function("NOW"); :}
+        ;
+
+sub_select_expr ::=
+        OP select_expr:s CP
+        {: RESULT = new SubSelect(s); :}
+        ;
+
+sql_expression_list_optional ::=
+        | sql_expression_list:e {: RESULT = e; :}
+        ;
+
+sql_expression_list ::=
+        sql_expression_list:l COMMA sql_expression:e
+        {:
+          java.util.List<Sql> list = l.getList();
+          list.add(e);
+          RESULT = new List(false, list.toArray(new Sql[0]));
+        :}
+        |
+        sql_expression:e
+        {: RESULT = new List(false, e); :}
+        ;
+
+case_when_then_else ::=
+        WHEN sql_expression:e THEN sql_expression:r
+        {: RESULT = buildExpr("WHEN", e, "THEN", r); :}
+        |
+        WHEN sql_expression:e THEN sql_expression:r ELSE sql_expression:er
+        {: RESULT = buildExpr("WHEN", e, "THEN", r, buildExpr("ELSE", er)); :}
+        |
+        WHEN sql_expression:e THEN sql_expression:r case_when_then_else:o
+        {: RESULT = buildExpr("WHEN", e, "THEN", r, o); :}
+        ;
+
+date_unit ::=
+        MICROSECOND           {: RESULT = "MICROSECOND"; :}
+        | SECOND              {: RESULT = "SECOND"; :}
+        | MINUTE              {: RESULT = "MINUTE"; :}
+        | HOUR                {: RESULT = "HOUR"; :}
+        | DAY                 {: RESULT = "DAY"; :}
+        | WEEK                {: RESULT = "WEEK"; :}
+        | MONTH               {: RESULT = "MONTH"; :}
+        | QUARTER             {: RESULT = "QUARTER"; :}
+        | YEAR                {: RESULT = "YEAR"; :}
+        | SECOND_MICROSECOND  {: RESULT = "SECOND_MICROSECOND"; :}
+        | MINUTE_MICROSECOND  {: RESULT = "MINUTE_MICROSECOND"; :}
+        | MINUTE_SECOND       {: RESULT = "MINUTE_SECOND"; :}
+        | HOUR_MICROSECOND    {: RESULT = "HOUR_MICROSECOND"; :}
+        | HOUR_SECOND         {: RESULT = "HOUR_SECOND"; :}
+        | HOUR_MINUTE         {: RESULT = "HOUR_MINUTE"; :}
+        | DAY_MICROSECOND     {: RESULT = "DAY_MICROSECOND"; :}
+        | DAY_SECOND          {: RESULT = "DAY_SECOND"; :}
+        | DAY_MINUTE          {: RESULT = "DAY_MINUTE"; :}
+        | DAY_HOUR            {: RESULT = "DAY_HOUR"; :}
+        | YEAR_MONTH          {: RESULT = "YEAR_MONTH"; :}
+        ;
+
+trim_mod ::=
+        LEADING     {: RESULT = "LEADING"; :}
+        | BOTH      {: RESULT = "BOTH"; :}
+        | TRAILING  {: RESULT = "TRAILING"; :}
+        ;
+
+convert_type ::=
+        NAME:n
+        {: RESULT = buildExpr(n); :}
+        |
+        NAME:n OP sql_expression:e CP
+        {: RESULT = buildExpr(e); :}
+        |
+        BINARY
+        {: RESULT = buildExpr("BINARY", null); :}
+        |
+        BINARY OP sql_expression:n CP
+        {: RESULT = buildExpr("BINARY", n); :}
+        |
+        CHAR charset_optional:c
+        {: RESULT = buildExpr("CHAR", null, c); :}
+        |
+        CHAR OP sql_expression:n CP charset_optional:c
+        {: RESULT = buildExpr("CHAR", n, c); :}
+        |
+        DATE
+        {: RESULT = buildExpr("DATE"); :}
+        |
+        DATETIME
+        {: RESULT = buildExpr("DATETIME"); :}
+        |
+        DECIMAL
+        {: RESULT = buildExpr("DECIMAL", null, null); :}
+        |
+        DECIMAL OP sql_expression:m CP
+        {: RESULT = buildExpr("DECIMAL", m, null); :}
+        |
+        DECIMAL OP sql_expression:m COMMA sql_expression:d CP
+        {: RESULT = buildExpr("DECIMAL", m, d); :}
+        |
+        TIME
+        {: RESULT = buildExpr("TIME"); :}
+        |
+        SIGNED sql_expression:e
+        {: RESULT = buildExpr("SIGNED", e); :}
+        |
+        UNSIGNED sql_expression:e
+        {: RESULT = buildExpr("UNSIGNED", e); :}
+        ;
+
+search_modifier ::=
+        |
+        IN NATURAL NAME NAME
+        {: RESULT = "IN NATURAL LANGUAGE MODE"; :}
+        |
+        IN NATURAL NAME NAME WITH NAME NAME
+        {: RESULT = "IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION"; :}
+        |
+        WITH NAME NAME
+        {: RESULT = "WITH QUERY EXPANSION"; :}
+        ;
